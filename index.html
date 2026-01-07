@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Robot FMS: Final v26 (Tab Interface)</title>
+    
+    <script src="https://code.createjs.com/1.0.0/easeljs.min.js"></script>
+    <script>
+        if (typeof createjs !== 'undefined') {
+            createjs.Ticker.framerate = 60;
+            createjs.Ticker.setFPS = function(fps) { createjs.Ticker.framerate = fps; };
+            createjs.Ticker.getFPS = function() { return createjs.Ticker.framerate; };
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/eventemitter2@6/lib/eventemitter2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ros2d@0.9.0/build/ros2d.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #1e1e2f; color: #fff; margin: 0; overflow: hidden; }
+        
+        /* 상단 탭 네비게이션 */
+        .tab-nav {
+            display: flex;
+            background: #111;
+            border-bottom: 2px solid #444;
+            height: 50px;
+        }
+        .tab-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+            border-bottom: 4px solid transparent;
+        }
+        .tab-btn:hover { background: #222; color: #fff; }
+        .tab-btn.active { color: #00d2ff; border-bottom: 4px solid #00d2ff; background: #1a1a1a; }
+
+        /* 메인 컨테이너 */
+        .content-view { display: none; height: calc(100vh - 50px); }
+        .content-view.active { display: flex; }
+
+        /* [Tab 1] 관제 모드 레이아웃 */
+        .map-section {
+            flex: 2;
+            background: #111;
+            position: relative;
+            border-right: 2px solid #444;
+            display: flex; justify-content: center; align-items: center;
+            background-image: linear-gradient(#222 1px, transparent 1px), linear-gradient(90deg, #222 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        .control-section {
+            flex: 1;
+            background: #27293d;
+            padding: 20px;
+            display: flex; flex-direction: column; gap: 15px;
+            overflow-y: auto;
+            min-width: 350px;
+        }
+
+        /* [Tab 2] 로그 모드 레이아웃 */
+        .log-container {
+            width: 100%;
+            height: 100%;
+            background: #000;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+        }
+        .full-log-box {
+            flex: 1;
+            background: #000;
+            color: #00ff00;
+            font-family: 'Consolas', monospace;
+            font-size: 1rem;
+            padding: 15px;
+            border: 1px solid #444;
+            overflow-y: scroll;
+            white-space: pre-wrap; /* 줄바꿈 허용 */
+            line-height: 1.5;
+        }
+        
+        /* 공통 UI 요소 */
+        h2 { margin: 0 0 10px 0; color: #00d2ff; font-size: 1.5rem; }
+        .box { background: #333; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
+        
+        /* 미니 상태바 (관제모드용) */
+        .mini-status { font-size: 0.8rem; color: #aaa; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        button { border: none; border-radius: 5px; cursor: pointer; font-weight: bold; color: white; transition: 0.1s; }
+        button:active { transform: scale(0.95); }
+        .btn-conn { background: #007bff; width: 100%; padding: 12px; font-size: 1.1rem; }
+        .btn-manual-map { background: #6f42c1; width: 100%; padding: 12px; margin-top:5px; }
+        .btn-init { background: #ffc107; color: black; width: 100%; padding: 10px; margin-bottom: 5px; }
+        .btn-go { background: #28a745; width: 100%; padding: 10px; }
+        .btn-clear { background: #555; padding: 10px 20px; margin-bottom: 10px; float: right; }
+
+        .dpad { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; width: 180px; margin: 0 auto; }
+        .btn-dir { height: 60px; font-size: 24px; background: #6c757d; border-radius: 8px; }
+        .btn-stop { background: #dc3545; }
+        .key-hint { font-size: 0.7rem; color: #ccc; display: block; }
+        .active-key { background: #00d2ff !important; box-shadow: 0 0 10px #00d2ff; }
+
+        input[type=range] { width: 100%; cursor: pointer; }
+        label { display: block; margin-bottom: 5px; font-size: 0.9rem; color: #ccc; font-weight: bold; }
+        .range-val { float: right; color: #00d2ff; }
+    </style>
+</head>
+<body>
+
+<nav class="tab-nav">
+    <button class="tab-btn active" onclick="switchTab('control')">🎮 관제 모드 (Control)</button>
+    <button class="tab-btn" onclick="switchTab('logs')">📝 시스템 로그 (Logs)</button>
+</nav>
+
+<div id="view-control" class="content-view active">
+    <div class="map-section" id="map-section">
+        <div id="nav-div"></div>
+        <div style="position: absolute; bottom: 20px; right: 20px; display: flex; gap: 10px;">
+            <button onclick="zoomMap(1.1)" style="background:#444; width:40px; height:40px; font-size:20px;">+</button>
+            <button onclick="zoomMap(0.9)" style="background:#444; width:40px; height:40px; font-size:20px;">-</button>
+            <button onclick="centerOnRobot()" style="background:#17a2b8; height:40px; padding:0 15px;">🎯 로봇 찾기</button>
+        </div>
+        <div style="position: absolute; top: 20px; right: 20px;">
+            <button onclick="fitMapToScreen()" style="background:#28a745; padding:8px 15px;">🌏 전체 보기</button>
+        </div>
+    </div>
+
+    <div class="control-section">
+        <div class="box">
+            <input type="text" id="wss-url" value="wss://sapropelic-blindly-karissa.ngrok-free.dev" style="width:100%; padding:8px; box-sizing: border-box; margin-bottom:5px;">
+            <button class="btn-conn" onclick="connect()">🔌 시스템 연결</button>
+            <div id="connection-status" style="margin-top:5px; color:gray; font-size:0.9rem;">🔴 연결 끊김</div>
+            <button class="btn-manual-map" onclick="manualMapLoad()">⚡ 지도 강제 로드 (QoS)</button>
+            <div id="mini-log" class="mini-status">대기 중...</div>
+        </div>
+
+        <div class="box" style="border: 1px solid #00d2ff;">
+            <label>⚡ 이동 속도 <span id="val-speed" class="range-val">0.5 m/s</span></label>
+            <input type="range" id="slider-speed" min="0.1" max="1.0" step="0.1" value="0.5" oninput="updateSpeedDisplay()">
+            <hr style="border-color:#555; margin:10px 0;">
+            <label>🔄 회전 속도 <span id="val-turn" class="range-val">1.0 rad/s</span></label>
+            <input type="range" id="slider-turn" min="0.5" max="2.0" step="0.1" value="1.0" oninput="updateSpeedDisplay()">
+        </div>
+
+        <div class="box">
+            <label>🤖 아이콘 크기 <span id="val-size" class="range-val">0.5 m</span></label>
+            <input type="range" id="robot-size-slider" min="0.1" max="2.0" step="0.1" value="0.5" oninput="changeRobotSize(this.value)">
+        </div>
+
+        <div class="box" style="text-align: center;">
+            <h3>🕹️ 수동 조작</h3>
+            <div class="dpad">
+                <div></div>
+                <button id="btn-w" class="btn-dir" onmousedown="move('forward')">▲<span class="key-hint">W</span></button>
+                <div></div>
+                <button id="btn-a" class="btn-dir" onmousedown="move('left')">◀<span class="key-hint">A</span></button>
+                <button id="btn-s" class="btn-dir btn-stop" onmousedown="move('stop')">■<span class="key-hint">S</span></button>
+                <button id="btn-d" class="btn-dir" onmousedown="move('right')">▶<span class="key-hint">D</span></button>
+                <div></div>
+                <button id="btn-x" class="btn-dir" onmousedown="move('backward')">▼<span class="key-hint">X</span></button>
+                <div></div>
+            </div>
+        </div>
+
+        <div class="box">
+            <h3>🤖 자율 주행</h3>
+            <button class="btn-init" onclick="setInitialPose()">📍 초기 위치 설정</button>
+            <div style="display: flex; gap: 5px; margin-top: 5px;">
+                <input type="number" id="goal-x" value="1.0" step="0.5" placeholder="X" style="width: 50%; padding: 8px;">
+                <input type="number" id="goal-y" value="0.0" step="0.5" placeholder="Y" style="width: 50%; padding: 8px;">
+            </div>
+            <button class="btn-go" onclick="sendGoal()" style="margin-top:5px;">🚩 목표 이동</button>
+        </div>
+    </div>
+</div>
+
+<div id="view-logs" class="content-view">
+    <div class="log-container">
+        <div>
+            <h2 style="display:inline-block;">📝 실시간 시스템 로그</h2>
+            <button class="btn-clear" onclick="clearLog()">🗑️ 로그 비우기</button>
+        </div>
+        <div id="full-log" class="full-log-box">
+            [System] 시스템 준비 완료. 로그 대기 중...
+        </div>
+    </div>
+</div>
+
+<script>
+    let ros;
+    let viewer;
+    let robotMarker; 
+    let pathShape; 
+    let cmdVelTopic;
+    let initPoseTopic;
+    let goalTopic;
+    let robotX = 0;
+    let robotY = 0;
+    let mapLoaded = false;
+    let currentGrid = null;
+    let currentLinearSpeed = 0.5;
+    let currentAngularSpeed = 1.0;
+
+    // 탭 전환 함수
+    function switchTab(tabName) {
+        // 모든 탭 컨텐츠 숨기기
+        document.querySelectorAll('.content-view').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+
+        if(tabName === 'control') {
+            document.getElementById('view-control').classList.add('active');
+            document.querySelectorAll('.tab-btn')[0].classList.add('active');
+            // 맵 뷰어가 깨지는 것 방지 (resize 이벤트 트리거)
+            setTimeout(() => { if(viewer) fitMapToScreen(); }, 100);
+        } else {
+            document.getElementById('view-logs').classList.add('active');
+            document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        }
+    }
+
+    // 통합 로그 함수 (메인 로그창 + 미니 로그창)
+    function log(msg) {
+        const time = new Date().toLocaleTimeString();
+        const fullMsg = `[${time}] ${msg}`;
+        
+        // 1. 큰 로그창에 추가
+        const logBox = document.getElementById('full-log');
+        logBox.innerHTML += `\n${fullMsg}`;
+        logBox.scrollTop = logBox.scrollHeight; // 자동 스크롤
+
+        // 2. 미니 로그창(관제화면) 업데이트
+        const miniBox = document.getElementById('mini-log');
+        if(miniBox) miniBox.innerText = `> ${msg}`;
+        
+        console.log(fullMsg);
+    }
+
+    function clearLog() {
+        document.getElementById('full-log').innerHTML = "[System] 로그가 초기화되었습니다.";
+    }
+
+    function setStatus(msg, color) {
+        const el = document.getElementById('connection-status');
+        el.innerText = msg;
+        el.style.color = color;
+    }
+
+    function updateSpeedDisplay() {
+        currentLinearSpeed = parseFloat(document.getElementById('slider-speed').value);
+        currentAngularSpeed = parseFloat(document.getElementById('slider-turn').value);
+        document.getElementById('val-speed').innerText = currentLinearSpeed + " m/s";
+        document.getElementById('val-turn').innerText = currentAngularSpeed + " rad/s";
+    }
+
+    function connect() {
+        const url = document.getElementById('ws-url').value;
+        try { ros = new ROSLIB.Ros({ url : url }); } catch (e) { alert("URL Error"); return; }
+
+        ros.on('connection', () => {
+            log("✅ ROS 브릿지 연결 성공!");
+            setStatus("🟢 시스템 온라인", "#00ff00");
+            initViewer();
+            initTopics();
+            initKeyboardControl();
+            setTimeout(manualMapLoad, 500);
+        });
+        ros.on('error', (e) => {
+            log("❌ 연결 에러");
+            setStatus("🔴 연결 에러", "#ff4444");
+        });
+        ros.on('close', () => {
+            log("⚠️ 연결 끊김");
+            setStatus("⚪ 오프라인", "gray");
+        });
+    }
+
+    function initViewer() {
+        if(!viewer) {
+            const width = document.getElementById('map-section').clientWidth;
+            const height = document.getElementById('map-section').clientHeight;
+            viewer = new ROS2D.Viewer({ divID : 'nav-div', width : width, height : height });
+        }
+
+        if(!pathShape) {
+            pathShape = new ROS2D.PathShape({ strokeSize: 0.05, strokeColor: '#ff00ff' }); 
+            viewer.scene.addChild(pathShape);
+        }
+
+        if(!robotMarker) {
+            robotMarker = new ROS2D.NavigationArrow({ size : 0.5, strokeSize : 0.05, fillColor : '#888888', pulse : false });
+            robotMarker.visible = true; 
+            viewer.scene.addChild(robotMarker);
+        }
+
+        let amclPoseTopic = new ROSLIB.Topic({
+            ros : ros, name : '/amcl_pose', messageType : 'geometry_msgs/msg/PoseWithCovarianceStamped',
+            qos: { reliability: 'reliable', durability: 'transient_local' } 
+        });
+
+        amclPoseTopic.subscribe((msg) => {
+            robotX = msg.pose.pose.position.x;
+            robotY = -msg.pose.pose.position.y;
+            robotMarker.x = robotX;
+            robotMarker.y = robotY;
+            
+            let q = msg.pose.pose.orientation;
+            let degree = -Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) * 180 / Math.PI;
+            robotMarker.rotation = degree;
+            
+            robotMarker.graphics.clear();
+            const currentSize = parseFloat(document.getElementById('robot-size-slider').value);
+            robotMarker.graphics.beginFill("#ff0000").drawPolyStar(0, 0, currentSize, 3, 0.6, -90);
+            viewer.scene.update();
+        });
+
+        let planTopic = new ROSLIB.Topic({ ros : ros, name : '/plan', messageType : 'nav_msgs/msg/Path' });
+        planTopic.subscribe((msg) => {
+            pathShape.setPath(msg);
+            viewer.scene.update();
+        });
+    }
+
+    function manualMapLoad() {
+        if(mapLoaded) return;
+        log("🔄 지도 데이터 요청 중...");
+        let mapListener = new ROSLIB.Topic({
+            ros : ros, name : '/map', messageType : 'nav_msgs/msg/OccupancyGrid',
+            qos: { durability: 'transient_local', reliability: 'reliable' } 
+        });
+        mapListener.subscribe(function(message) {
+            log(`🎉 지도 수신 완료 (${message.info.width}x${message.info.height})`);
+            try {
+                var manualGrid = new ROS2D.OccupancyGrid({ message: message });
+                currentGrid = manualGrid;
+                viewer.scene.addChildAt(manualGrid, 0); 
+                fitMapToScreen();
+                mapLoaded = true;
+                mapListener.unsubscribe();
+            } catch (e) { log("❌ 지도 렌더링 실패: " + e); }
+        });
+    }
+
+    function fitMapToScreen() {
+        if(currentGrid && viewer) {
+            viewer.scaleToDimensions(currentGrid.width, currentGrid.height);
+            viewer.shift(currentGrid.pose.position.x, currentGrid.pose.position.y);
+            viewer.scene.update();
+        }
+    }
+
+    function changeRobotSize(val) {
+        document.getElementById('val-size').innerText = `${val} m`;
+        if(robotMarker) {
+            robotMarker.graphics.clear();
+            robotMarker.graphics.beginFill("#ff0000").drawPolyStar(0, 0, val, 3, 0.6, -90);
+            viewer.scene.update();
+        }
+    }
+
+    function initTopics() {
+        cmdVelTopic = new ROSLIB.Topic({ ros : ros, name : '/cmd_vel_teleop', messageType : 'geometry_msgs/msg/TwistStamped' });
+        initPoseTopic = new ROSLIB.Topic({ ros : ros, name : '/initialpose', messageType : 'geometry_msgs/msg/PoseWithCovarianceStamped' });
+        goalTopic = new ROSLIB.Topic({ ros : ros, name : '/goal_pose', messageType : 'geometry_msgs/msg/PoseStamped' });
+    }
+
+    function move(direction) {
+        if(!cmdVelTopic) return;
+        let lx = 0, az = 0;
+        switch(direction) {
+            case 'forward': lx = currentLinearSpeed; break;
+            case 'backward': lx = -currentLinearSpeed; break;
+            case 'left': az = currentAngularSpeed; break;
+            case 'right': az = -currentAngularSpeed; break;
+            case 'stop': lx = 0; az = 0; break;
+        }
+        let twistStamped = new ROSLIB.Message({
+            header: { frame_id: "base_link", stamp: { sec: 0, nanosec: 0 } },
+            twist: { linear: { x: lx, y: 0, z: 0 }, angular: { x: 0, y: 0, z: az } }
+        });
+        cmdVelTopic.publish(twistStamped);
+        if(direction !== 'stop') log(`이동 명령: ${direction} (v=${lx}, w=${az})`);
+    }
+
+    function centerOnRobot() {
+        if(viewer && robotMarker.visible) {
+            viewer.shift(robotX, -robotY);
+            viewer.scene.update();
+        } else {
+            log("⚠️ 로봇 위치 모름.");
+        }
+    }
+
+    function zoomMap(mul) {
+        if(viewer) {
+            viewer.scene.scaleX *= mul;
+            viewer.scene.scaleY *= mul;
+            viewer.scene.update();
+        }
+    }
+
+    function setInitialPose() {
+        if(!initPoseTopic) return;
+        let pose = new ROSLIB.Message({
+            header: { frame_id: "map" },
+            pose: { 
+                pose: { position: { x: 0.0, y: 0.0, z: 0.0 }, orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 } },
+                covariance: [0.25, 0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.068]
+            }
+        });
+        initPoseTopic.publish(pose);
+        log("📍 초기화 전송");
+    }
+
+    function sendGoal() {
+        if(!goalTopic) return;
+        let x = parseFloat(document.getElementById('goal-x').value);
+        let y = parseFloat(document.getElementById('goal-y').value);
+        let goalMsg = new ROSLIB.Message({
+            header: { frame_id: "map" },
+            pose: { position: { x: x, y: y, z: 0.0 }, orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 } }
+        });
+        goalTopic.publish(goalMsg);
+        log(`🚩 목표 전송 (${x}, ${y})`);
+    }
+
+    function initKeyboardControl() {
+        window.addEventListener("keydown", function(e) {
+            if(document.activeElement.tagName === "INPUT") return;
+            switch(e.key.toLowerCase()) {
+                case "w": move('forward'); highlightBtn('btn-w'); break;
+                case "x": move('backward'); highlightBtn('btn-x'); break;
+                case "a": move('left'); highlightBtn('btn-a'); break;
+                case "d": move('right'); highlightBtn('btn-d'); break;
+                case "s": case " ": move('stop'); highlightBtn('btn-s'); break;
+            }
+        });
+        window.addEventListener("keyup", function(e) {
+            document.querySelectorAll('.btn-dir').forEach(b => b.classList.remove('active-key'));
+        });
+    }
+
+    function highlightBtn(id) {
+        document.querySelectorAll('.btn-dir').forEach(b => b.classList.remove('active-key'));
+        const btn = document.getElementById(id);
+        if(btn) btn.classList.add('active-key');
+    }
+</script>
+
+</body>
+</html>
