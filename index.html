@@ -260,7 +260,7 @@
     }
 
     function connect() {
-        const url = document.getElementById('ws-url').value;
+        const url = document.getElementById('wss-url').value;
         try { ros = new ROSLIB.Ros({ url : url }); } catch (e) { alert("URL Error"); return; }
 
         ros.on('connection', () => {
